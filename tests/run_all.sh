@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
 # tests/run_all.sh — Run all test suites and report combined results
+
+# Auto-re-exec with modern bash if running on macOS default bash 3.2
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3) )); then
+    if command -v brew >/dev/null 2>&1 && [ -x "$(brew --prefix)/bin/bash" ]; then
+        exec "$(brew --prefix)/bin/bash" "$0" "$@"
+    elif [ -x /opt/homebrew/bin/bash ]; then
+        exec /opt/homebrew/bin/bash "$0" "$@"
+    elif [ -x /usr/local/bin/bash ]; then
+        exec /usr/local/bin/bash "$0" "$@"
+    else
+        printf "[ERROR] bash 4.3+ required for tests (you have %s)\n" "$BASH_VERSION" >&2
+        printf "macOS users: brew install bash\n" >&2
+        exit 1
+    fi
+fi
+
 IFS=$'\n\t'
 SCAFFOLD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -13,7 +29,7 @@ run_suite() {
     name="$(basename "$file")"
     local output exit_code
 
-    output=$(bash "$file" 2>&1)
+    output=$("${BASH}" "$file" 2>&1)
     exit_code=$?
 
     local pass fail

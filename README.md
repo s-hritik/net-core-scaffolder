@@ -1,41 +1,3 @@
-# .NET Scaffolding Master v5.0 — Setup & Usage Guide
-
-## What's new in v5.0
-
-| Area | Change |
-|---|---|
-| Error handling | `set -e` removed. Every command uses `run()` / `must_run()` — no more false crashes |
-| Rollback | Granular stack: rollback only the current phase, or everything |
-| Architecture | Modular: `lib/` + `options/` — each concern in its own file |
-| State | CTX associative array replaces 15 scattered globals |
-| Testing | Each lib file has its own test suite; fully isolated, no real `dotnet` needed |
-
----
-
-## File structure
-
-```
-scaffold/
-├── scaffold.sh              ← Entry point (run this)
-├── lib/
-│   ├── core.sh              ← Logging · run() · atomic_write · rollback stack · CTX
-│   ├── program_cs.sh        ← All Program.cs injection (Roslyn + awk fallback)
-│   ├── packages.sh          ← NuGet · dotnet local tool management
-│   └── project.sh           ← Project discovery · .env · DB validation
-├── options/
-│   ├── opt_dbfirst.sh       ← Option 1: DB-First
-│   ├── opt_crud.sh          ← Options 2/3/4/7: Web API · MVC · Razor · Blazor
-│   ├── opt_identity.sh      ← Option 5: Identity
-│   └── opt_partialview.sh   ← Option 6: Partial View
-└── tests/
-    ├── test_runner.sh       ← Assert helpers + reporting
-    ├── test_core.sh         ← Tests for lib/core.sh
-    ├── test_program_cs.sh   ← Tests for lib/program_cs.sh
-    ├── test_project.sh      ← Tests for lib/project.sh
-    └── run_all.sh           ← Run all test suites
-```
-
----
 
 ## Prerequisites
 
@@ -233,22 +195,6 @@ bash ~/tools/scaffold/tests/test_program_cs.sh
 bash ~/tools/scaffold/tests/test_project.sh
 ```
 
-Expected output:
-```
-╔══════════════════════════════════════════════╗
-║  scaffold.sh — Complete Test Suite           ║
-╚══════════════════════════════════════════════╝
-✓  test_core.sh                          18 passed
-✓  test_program_cs.sh                    31 passed
-✓  test_project.sh                       22 passed
-
-  Total: 71  |  Passed: 71  |  Failed: 0  |  Score: 100%
-```
-
-Tests are fully isolated — each creates its own temp directory and cleans up after itself. No real `dotnet`, no network, no database needed.
-
----
-
 ## How the error handling works
 
 ```bash
@@ -289,15 +235,3 @@ pcs_inject_after_builder ... "connString"     # injected 2nd → ends up 2nd ✓
 pcs_inject_after_builder ... "Env.Load();"   # injected 3rd → ends up 1st ✓
 ```
 
----
-
-## Troubleshooting
-
-| Error | Fix |
-|---|---|
-| `bash 4.3+ required` | `brew install bash` then use `/opt/homebrew/bin/bash scaffold.sh` |
-| `No .csproj found` | Run from inside a project folder or solution root |
-| `Could not install dotnet-aspnet-codegenerator` | Run manually: `dotnet tool install dotnet-aspnet-codegenerator --version 8.0` |
-| `Cannot reach database` | Ensure Docker is running: `docker start sqlserver` |
-| `Build FAILED` after scaffold | The script auto-rolls back. Check the error, fix `Program.cs` manually, re-run |
-| `Blazor requires .NET 9+` | Use option 3 (MVC) or 4 (Razor Pages) for .NET 8 projects |

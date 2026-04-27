@@ -26,8 +26,8 @@ find_cs_files_nul() {
 # Handles file-scoped  "namespace Foo;"  and block  "namespace Foo {"  styles.
 # Also strips extra whitespace variants.
 extract_namespace() {
-    grep -m1 '^namespace' "$1" \
-        | sed 's/^namespace[[:space:]]*//; s/[[:space:]]*[;{].*//'
+    grep -m1 '^[[:space:]]*namespace' "$1" \
+        | sed 's/^[[:space:]]*namespace[[:space:]]*//; s/[[:space:]]*[;{].*//'
 }
 
 add_context_namespace() {
@@ -89,6 +89,25 @@ inject_dbsets_into_context() {
     ctx_file=$(find_cs_file "${db_ctx}.cs")
     [ -z "$ctx_file" ] && return 0
 
+    local model_ns="${_ctx_ds[project_ns]}.Models"
+    if ! grep -q "^[[:space:]]*using ${model_ns};" "$ctx_file" 2>/dev/null; then
+        if [ "${_ctx_ds[dry_run]}" = "0" ]; then
+            backup_file "$ctx_file"
+            awk -v ns="$model_ns" '
+                /^using / { last_using=NR }
+                { lines[NR]=$0 }
+                END {
+                    if (last_using == 0) { print "using " ns ";"; print "" }
+                    for (i=1; i<=NR; i++) {
+                        print lines[i]
+                        if (i == last_using) { print "using " ns ";" }
+                    }
+                }
+            ' "$ctx_file" > "${ctx_file}.tmp" && mv "${ctx_file}.tmp" "$ctx_file"
+            log_info "Added using ${model_ns} to ${db_ctx}."
+        fi
+    fi
+
     for model in "${models[@]}"; do
         if grep -q "DbSet<${model}>" "$ctx_file" 2>/dev/null; then
             log_info "DbSet<${model}> already in ${db_ctx}."
@@ -105,12 +124,62 @@ inject_dbsets_into_context() {
 
         local set_line="    public DbSet<${model}> ${model}s { get; set; } = null!;"
         awk -v line="$set_line" '
-            /^\}/ && !done { print line; done=1 }
+            /^[[:space:]]*\}/ && !done { print line; done=1 }
             { print }
         ' "$ctx_file" > "${ctx_file}.tmp" && mv "${ctx_file}.tmp" "$ctx_file"
 
         log_success "DbSet<${model}> added to ${db_ctx}."
     done
+}
+
+# ─── Design-Time Factory ─────────────────────────────────────────────────────
+# Generates an IDesignTimeDbContextFactory for the given DbContext.
+# This prevents 'aspnet-codegenerator' from failing to resolve DbContextOptions
+# when it executes Program.cs from an unexpected working directory.
+
+ensure_designtime_factory() {
+    local ctx_name="$1"
+    local db_ctx="$2"
+    local -n _ctx_df="$ctx_name"
+
+    local factory_file="Data/${db_ctx}Factory.cs"
+    if [ -f "$factory_file" ]; then
+        return 0
+    fi
+
+    if [ "${_ctx_df[dry_run]}" = "1" ]; then
+        log_dry "Would create IDesignTimeDbContextFactory: ${factory_file}"
+        return 0
+    fi
+
+    log_info "Pre-generating design-time factory '${db_ctx}Factory'..."
+    mkdir -p Data
+    record_dir_created "Data"
+
+    {
+        echo "using Microsoft.EntityFrameworkCore;"
+        echo "using Microsoft.EntityFrameworkCore.Design;"
+        echo "using System;"
+        echo ""
+        echo "namespace ${_ctx_df[project_ns]}.Data;"
+        echo ""
+        echo "public class ${db_ctx}Factory : IDesignTimeDbContextFactory<${db_ctx}>"
+        echo "{"
+        echo "    public ${db_ctx} CreateDbContext(string[] args)"
+        echo "    {"
+        echo "        var optionsBuilder = new DbContextOptionsBuilder<${db_ctx}>();"
+        echo "        var connStr = Environment.GetEnvironmentVariable(\"SCAFFOLD_CONN_STR\");"
+        echo "        if (string.IsNullOrEmpty(connStr))"
+        echo "        {"
+        echo "            throw new InvalidOperationException(\"SCAFFOLD_CONN_STR environment variable is missing. Run via the scaffold tool.\");"
+        echo "        }"
+        echo "        optionsBuilder.${_ctx_df[db_use_method]}(connStr);"
+        echo "        return new ${db_ctx}(optionsBuilder.Options);"
+        echo "    }"
+        echo "}"
+    } | atomic_write "$factory_file"
+    
+    record_created "$factory_file"
 }
 
 # ─── Multi-project solution awareness ────────────────────────────────────────
@@ -325,17 +394,27 @@ SCAFFOLD_DB_PROVIDER="${_ctx_env[db_provider]}"
 SCAFFOLD_DB_USE_METHOD="${_ctx_env[db_use_method]}"
 EOF
         log_success ".env created."
-        source .env
 
     else
         log_info ".env exists — loading."
-        source .env
     fi
 
-    # Populate context from sourced .env variables
-    _ctx_env[conn_str]="${SCAFFOLD_CONN_STR:-}"
-    _ctx_env[db_provider]="${SCAFFOLD_DB_PROVIDER:-Microsoft.EntityFrameworkCore.SqlServer}"
-    _ctx_env[db_use_method]="${SCAFFOLD_DB_USE_METHOD:-UseSqlServer}"
+    # Populate context from .env without sourcing (prevents variable expansion of passwords with $)
+    if [ -f .env ]; then
+        _ctx_env[conn_str]=$(grep '^SCAFFOLD_CONN_STR=' .env | head -n1 | sed -e 's/^SCAFFOLD_CONN_STR=//' -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+        _ctx_env[db_provider]=$(grep '^SCAFFOLD_DB_PROVIDER=' .env | head -n1 | sed -e 's/^SCAFFOLD_DB_PROVIDER=//' -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+        _ctx_env[db_use_method]=$(grep '^SCAFFOLD_DB_USE_METHOD=' .env | head -n1 | sed -e 's/^SCAFFOLD_DB_USE_METHOD=//' -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+    fi
+
+    # Provide defaults if missing
+    _ctx_env[db_provider]="${_ctx_env[db_provider]:-Microsoft.EntityFrameworkCore.SqlServer}"
+    _ctx_env[db_use_method]="${_ctx_env[db_use_method]:-UseSqlServer}"
+
+    # Export explicitly to ensure child 'dotnet' processes inherit them
+    # This prevents DbContext activation failures during scaffolding.
+    export SCAFFOLD_CONN_STR="${_ctx_env[conn_str]}"
+    export SCAFFOLD_DB_PROVIDER="${_ctx_env[db_provider]}"
+    export SCAFFOLD_DB_USE_METHOD="${_ctx_env[db_use_method]}"
 
     # .gitignore
     if [ ! -f .gitignore ] && [ "$dry" = "0" ]; then

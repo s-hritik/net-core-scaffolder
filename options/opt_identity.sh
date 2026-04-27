@@ -12,13 +12,14 @@ run_identity() {
         "Microsoft.AspNetCore.Identity.UI" \
         "Microsoft.AspNetCore.Identity.EntityFrameworkCore" \
         "Microsoft.VisualStudio.Web.CodeGeneration.Design" \
-        "Microsoft.EntityFrameworkCore.SqlServer" \
+        "${_ctx_id[db_provider]}" \
         "Microsoft.EntityFrameworkCore.Tools"
 
     local DB_CONTEXT
     DB_CONTEXT=$(find_existing_context)
     [ -z "$DB_CONTEXT" ] \
         && read -r -p "Enter NEW DbContext Name [e.g. ApplicationDbContext]: " DB_CONTEXT
+    DB_CONTEXT="${DB_CONTEXT:-ApplicationDbContext}"
 
     # Identity file selection menu
     local -a ID_FILES=(
@@ -57,7 +58,7 @@ run_identity() {
     local FILE_CHOICES
     read -r -p "Numbers separated by spaces (or 0 for ALL): " FILE_CHOICES
 
-    local FILE_FLAG="" SELECTED_FILES=""
+    local SELECTED_FILES=""
     if [[ " ${FILE_CHOICES} " != *" 0 "* ]] && [ -n "$FILE_CHOICES" ]; then
         local num local_idx
         for num in ${FILE_CHOICES// /$' \n'}; do
@@ -67,10 +68,38 @@ run_identity() {
                 SELECTED_FILES="${SELECTED_FILES:+${SELECTED_FILES};}${ID_FILES[$local_idx]}"
             fi
         done
-        [ -n "$SELECTED_FILES" ] && FILE_FLAG="--files $SELECTED_FILES"
         log_info "Selected: $SELECTED_FILES"
     else
         log_info "Scaffolding ALL Identity files..."
+    fi
+
+    # Pre-generate DbContext stub if it doesn't exist yet
+    # (the codegenerator may fail, so we need a compilable context regardless)
+    local PROJECT_NS="${_ctx_id[project_ns]}"
+    local CTX_FILE
+    CTX_FILE=$(find_cs_file "${DB_CONTEXT}.cs")
+    if [ -z "$CTX_FILE" ]; then
+        if [ "${_ctx_id[dry_run]}" = "1" ]; then
+            log_dry "Would create Data/${DB_CONTEXT}.cs"
+        else
+            log_info "Pre-generating IdentityDbContext stub '${DB_CONTEXT}'..."
+            mkdir -p Data
+            record_dir_created "Data"
+            atomic_write "Data/${DB_CONTEXT}.cs" << EOF
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+
+namespace ${PROJECT_NS}.Data;
+
+public class ${DB_CONTEXT} : IdentityDbContext<IdentityUser>
+{
+    public ${DB_CONTEXT}(DbContextOptions<${DB_CONTEXT}> options)
+        : base(options) { }
+}
+EOF
+            record_created "Data/${DB_CONTEXT}.cs"
+        fi
     fi
 
     if [ "${_ctx_id[dry_run]}" = "0" ]; then
@@ -82,16 +111,24 @@ run_identity() {
     protect_appsettings
 
     if [ "${_ctx_id[dry_run]}" = "1" ]; then
-        log_dry "Would scaffold Identity: $DB_CONTEXT ${FILE_FLAG}"
+        log_dry "Would scaffold Identity: $DB_CONTEXT ${SELECTED_FILES:+(files: $SELECTED_FILES)}"
     else
         if [ "${_ctx_id[scaffolder]}" = "new" ]; then
-            # shellcheck disable=SC2086
-            must_run "Scaffold Identity" \
-                dotnet scaffold identity --dbContext "$DB_CONTEXT" $FILE_FLAG --force --project .
+            if [ -n "$SELECTED_FILES" ]; then
+                must_run "Scaffold Identity" \
+                    dotnet scaffold identity --dbContext "$DB_CONTEXT" --files "$SELECTED_FILES" --force --project .
+            else
+                must_run "Scaffold Identity" \
+                    dotnet scaffold identity --dbContext "$DB_CONTEXT" --force --project .
+            fi
         else
-            # shellcheck disable=SC2086
-            must_run "Scaffold Identity" \
-                dotnet aspnet-codegenerator identity -dc "$DB_CONTEXT" $FILE_FLAG --force
+            if [ -n "$SELECTED_FILES" ]; then
+                must_run "Scaffold Identity" \
+                    dotnet aspnet-codegenerator identity -dc "$DB_CONTEXT" --files "$SELECTED_FILES" --force
+            else
+                must_run "Scaffold Identity" \
+                    dotnet aspnet-codegenerator identity -dc "$DB_CONTEXT" --force
+            fi
         fi
     fi
 
@@ -99,7 +136,6 @@ run_identity() {
 
     # Normalize: codegenerator places context in Areas/Identity/Data/ — move to Data/
     local BAD_PATH="Areas/Identity/Data/${DB_CONTEXT}.cs"
-    local PROJECT_NS="${_ctx_id[project_ns]}"
 
     if [ -f "$BAD_PATH" ]; then
         log_info "Relocating DbContext from Areas/Identity/Data/ → Data/ ..."
@@ -125,6 +161,7 @@ run_identity() {
     fi
 
     fix_ef_namespace "$ctx_name"
+    add_context_namespace "$ctx_name" "$DB_CONTEXT"
     setup_identity_program_cs "$ctx_name" "$DB_CONTEXT"
 
     if [ "${_ctx_id[dry_run]}" = "0" ]; then

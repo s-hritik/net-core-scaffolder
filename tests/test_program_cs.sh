@@ -9,6 +9,12 @@ source "${SCAFFOLD_DIR}/lib/program_cs.sh"
 
 printf "${C_B}${C_C}\n╔══════════════════════════════════════╗\n║  test_program_cs.sh                  ║\n╚══════════════════════════════════════╝${C_X}\n"
 
+# ─── Mocking ─────────────────────────────────────────────────────────────────
+# We don't want to actually install NuGet packages during Program.cs injection tests
+ensure_package() {
+    return 0
+}
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 make_standard_program() {
     cat > Program.cs << 'EOF'
@@ -66,10 +72,10 @@ test_inject_after() {
     local dir; dir=$(mktemp -d "/tmp/pcs_test_XXXXXX")
     pushd "$dir" > /dev/null
     echo "$program_content" > Program.cs
-    awk_fallback_op "inject-after-builder" "Env.Load();" "Env.Load();"
-    local found; found=$(grep -c "Env.Load();" Program.cs || echo 0)
+    awk_fallback_op "inject-after-builder" "Env.Load(" "Env.Load(System.IO.Path.Combine(builder.Environment.ContentRootPath, \".env\"));"
+    local found; found=$(grep -c "Env.Load(" Program.cs || echo 0)
     popd > /dev/null; rm -rf "$dir"
-    [ "$found" -ge 1 ] && pass "$label" || fail "$label" "Env.Load(); not injected"
+    [ "$found" -ge 1 ] && pass "$label" || fail "$label" "Env.Load( not injected"
 }
 
 test_inject_after "standard format" \
@@ -91,9 +97,9 @@ var app = builder.Build(); app.Run();'
 suite "awk_fallback_op inject-after-builder — idempotent"
 with_temp_project "idem_after" '
     make_standard_program
-    awk_fallback_op "inject-after-builder" "Env.Load();" "Env.Load();"
-    awk_fallback_op "inject-after-builder" "Env.Load();" "Env.Load();"
-    count=$(grep -c "Env.Load();" Program.cs)
+    awk_fallback_op "inject-after-builder" "Env.Load(" "Env.Load(System.IO.Path.Combine(builder.Environment.ContentRootPath, \".env\"));"
+    awk_fallback_op "inject-after-builder" "Env.Load(" "Env.Load(System.IO.Path.Combine(builder.Environment.ContentRootPath, \".env\"));"
+    count=$(grep -c "Env.Load(" Program.cs)
     assert_eq "no duplicate after two calls" "$count" "1"
 '
 
@@ -193,12 +199,12 @@ with_temp_project "setup_pcs_order" '
 
     setup_program_cs "TEST_CTX" "AppDbContext"
 
-    assert_file_contains "Env.Load() present"      "Program.cs" "Env.Load();"
+    assert_file_contains "Env.Load() present"      "Program.cs" "Env.Load("
     assert_file_contains "connString present"       "Program.cs" "SCAFFOLD_CONN_STR"
     assert_file_contains "AddDbContext present"     "Program.cs" "AddDbContext<AppDbContext>"
     assert_file_contains "UseSqlServer present"     "Program.cs" "UseSqlServer(connString)"
 
-    env_line=$(grep -n "Env.Load();" Program.cs | head -1 | cut -d: -f1)
+    env_line=$(grep -n "Env.Load(" Program.cs | head -1 | cut -d: -f1)
     conn_line=$(grep -n "SCAFFOLD_CONN_STR" Program.cs | head -1 | cut -d: -f1)
     ctx_line=$(grep -n "AddDbContext<AppDbContext>" Program.cs | head -1 | cut -d: -f1)
 

@@ -55,8 +55,7 @@ safe_run() {
 atomic_write() {
     local dest="$1"
     local tmp="${TMPDIR:-/tmp}/scaffold_write_$$.tmp"
-    cat > "$tmp"
-    mv "$tmp" "$dest"
+    cat > "$tmp" && mv "$tmp" "$dest"
 }
 
 # ─── Granular Rollback Stack ─────────────────────────────────────────────────

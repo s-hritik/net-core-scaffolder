@@ -170,7 +170,7 @@ ROSLYN_SCRIPT
 init_roslyn_script() {
     local -n ctx="$1"
     local path
-    path="$(mktemp "${TMPDIR:-/tmp}/scaffold_rewriter_XXXXXX.csx")"
+    path="$(mktemp "${TMPDIR:-/tmp}/scaffold_rewriter_${$}_XXXXXX.csx")"
     emit_roslyn_rewriter "$path"
     ctx[roslyn_script_path]="$path"
     ctx[roslyn_available]="1"
@@ -186,7 +186,7 @@ awk_fallback_op() {
     case "$op" in
         add-using)
             [ -f "Program.cs" ] || return 0
-            if grep -q "^using ${p1};" "Program.cs"; then return 0; fi
+            if grep -q "^[[:space:]]*using ${p1};" "Program.cs"; then return 0; fi
             { printf 'using %s;\n' "$p1"; cat "Program.cs"; } > "Program.cs.tmp" \
                 && mv "Program.cs.tmp" "Program.cs"
             ;;
@@ -327,14 +327,16 @@ setup_program_cs() {
 
     # Reversed call order — see comment above
     pcs_inject_after_builder "$ctx_name" \
-        "AddDbContext_unique" \
+        "AddDbContext<${db_context}>" \
         "builder.Services.AddDbContext<${db_context}>(options => options.${method}(connString));"
     pcs_inject_after_builder "$ctx_name" \
         "var connString" \
         'var connString = Environment.GetEnvironmentVariable("SCAFFOLD_CONN_STR");'
     pcs_inject_after_builder "$ctx_name" \
-        "Env.Load_unique" \
-        "Env.Load();"
+        "Env.Load(" \
+        'Env.Load(System.IO.Path.Combine(builder.Environment.ContentRootPath, ".env"));'
+
+    ensure_designtime_factory "$ctx_name" "$db_context"
 
     log_success "Program.cs configured for '${db_context}'."
 }
@@ -361,17 +363,17 @@ setup_identity_program_cs() {
 
     # Reversed call order — ends up: Env.Load → connString → DbContext → DefaultIdentity
     pcs_inject_after_builder "$ctx_name" \
-        "AddDefaultIdentity_unique" \
+        "AddDefaultIdentity<IdentityUser>" \
         "builder.Services.AddDefaultIdentity<IdentityUser>(options => options.SignIn.RequireConfirmedAccount = true).AddEntityFrameworkStores<${db_context}>();"
     pcs_inject_after_builder "$ctx_name" \
-        "AddDbContext_unique" \
+        "AddDbContext<${db_context}>" \
         "builder.Services.AddDbContext<${db_context}>(options => options.${method}(connString));"
     pcs_inject_after_builder "$ctx_name" \
         "var connString" \
         'var connString = Environment.GetEnvironmentVariable("SCAFFOLD_CONN_STR");'
     pcs_inject_after_builder "$ctx_name" \
-        "Env.Load_unique" \
-        "Env.Load();"
+        "Env.Load(" \
+        'Env.Load(System.IO.Path.Combine(builder.Environment.ContentRootPath, ".env"));'
 
     pcs_inject_before_build "$ctx_name" \
         "AddRazorPages" \
@@ -380,9 +382,16 @@ setup_identity_program_cs() {
     pcs_inject_middleware "$ctx_name" \
         "app.UseAuthentication();" \
         "app.UseAuthentication();"
-    pcs_inject_middleware "$ctx_name" \
-        "app.MapRazorPages();" \
-        "app.MapRazorPages();"
+
+    # MapRazorPages must go AFTER UseAuthorization — inject it at the end
+    # of the middleware pipeline (before app.Run)
+    if [ -f "Program.cs" ] && ! grep -q "app.MapRazorPages()" "Program.cs"; then
+        pcs_inject_middleware "$ctx_name" \
+            "app.MapRazorPages();" \
+            "app.MapRazorPages();"
+    fi
+
+    ensure_designtime_factory "$ctx_name" "$db_context"
 
     log_success "Program.cs fully wired for Identity with '${db_context}'."
 }

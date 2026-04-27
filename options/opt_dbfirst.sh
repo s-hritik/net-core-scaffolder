@@ -11,6 +11,7 @@ run_dbfirst() {
     local DB_CONTEXT
     DB_CONTEXT=$(find_existing_context)
     [ -z "$DB_CONTEXT" ] && read -r -p "Enter NEW DbContext Name: " DB_CONTEXT
+    DB_CONTEXT="${DB_CONTEXT:-AppDbContext}"
 
     ensure_package "$ctx_name" \
         "Microsoft.EntityFrameworkCore.Design" \

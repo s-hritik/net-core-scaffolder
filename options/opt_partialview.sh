@@ -12,6 +12,7 @@ run_partialview() {
 
     local PARTIAL_NAME PARTIAL_MODEL PARTIAL_DIR
     read -r -p "Partial View Name (e.g. _UserCard): " PARTIAL_NAME
+    PARTIAL_NAME="${PARTIAL_NAME:-_Partial}"
     read -r -p "Model Name (blank for empty partial): " PARTIAL_MODEL
     read -r -p "Output directory [Views/Shared]: "      PARTIAL_DIR
     PARTIAL_DIR="${PARTIAL_DIR:-Views/Shared}"
@@ -25,14 +26,26 @@ run_partialview() {
     mkdir -p "$PARTIAL_DIR"
     record_dir_created "$PARTIAL_DIR"
 
-    if [ -z "$PARTIAL_MODEL" ]; then
-        must_run "Scaffold empty partial" \
-            dotnet aspnet-codegenerator view "$PARTIAL_NAME" Empty \
-                -partial -outDir "$PARTIAL_DIR" -f
+    if [ "${_ctx_pv[scaffolder]}" = "new" ]; then
+        if [ -z "$PARTIAL_MODEL" ]; then
+            must_run "Scaffold empty partial" \
+                dotnet scaffold view "$PARTIAL_NAME" Empty \
+                    --partial --outputDir "$PARTIAL_DIR" --force --project .
+        else
+            must_run "Scaffold typed partial" \
+                dotnet scaffold view "$PARTIAL_NAME" Empty \
+                    --partial --model "$PARTIAL_MODEL" --outputDir "$PARTIAL_DIR" --force --project .
+        fi
     else
-        must_run "Scaffold typed partial" \
-            dotnet aspnet-codegenerator view "$PARTIAL_NAME" Empty \
-                -partial -m "$PARTIAL_MODEL" -outDir "$PARTIAL_DIR" -f
+        if [ -z "$PARTIAL_MODEL" ]; then
+            must_run "Scaffold empty partial" \
+                dotnet aspnet-codegenerator view "$PARTIAL_NAME" Empty \
+                    -partial -outDir "$PARTIAL_DIR" -f
+        else
+            must_run "Scaffold typed partial" \
+                dotnet aspnet-codegenerator view "$PARTIAL_NAME" Empty \
+                    -partial -m "$PARTIAL_MODEL" -outDir "$PARTIAL_DIR" -f
+        fi
     fi
 
     log_success "Partial view '${PARTIAL_NAME}' created in '${PARTIAL_DIR}'."

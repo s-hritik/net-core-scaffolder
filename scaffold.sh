@@ -131,7 +131,7 @@ printf "  7) Blazor Components (Full CRUD Blazor pages — .NET 9+ only)\n"
 printf "  8) Exit\n"
 read -r -p "Choice [1-8]: " CHOICE
 
-[ "$CHOICE" -eq 8 ] && exit 0
+[ "$CHOICE" = "8" ] && exit 0
 
 # ─── Dispatch to option handler ───────────────────────────────────────────────
 case $CHOICE in
